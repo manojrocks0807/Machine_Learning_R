@@ -1,0 +1,190 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+getwd()
+setwd("D:/HumanResources")
+
+
+hr_train = read.csv("hr_train.csv", stringsAsFactors = F)
+hr_test = read.csv("hr_test.csv", stringsAsFactors = F)
+
+names(hr_train)
+class(hr_train$promotion_last_5years)
+table(hr_train$promotion_last_5years)
+
+tapply(hr_train$left, hr_train$satisfaction_level, var, na.rm = T)
+length(hr_train$satisfaction_level)
+library(ggplot2)
+ggplot(data = hr_train, aes(average_montly_hours))+geom_histogram()
+tapply(hr_train$left, hr_train$salary, sum, na.rm = T)
+cor.test(hr_train$last_evaluation, hr_train$average_montly_hours)
+
+tapply(hr_train$left, hr_train$Work_accident, sum, na.rm = T)
+
+median(hr_train$time_spend_company[hr_train$left == 1])
+
+tapply(hr_train$average_montly_hours, hr_train$sales, median, na.rm = T)
+
+table(hr_train$number_project, hr_train$left)
+
+tab = table(hr_train$left, hr_train$Work_accident)
+prop.table(tab, 1)
+
+
+hr_test$left = NA
+hr_train$data = "Train"
+hr_test$data = "Test"
+
+hr_all = rbind(hr_train, hr_test)
+```
+
+
+#Let's look and continue with the data preparatin
+```{r}
+glimpse(hr_all)
+unique(hr_all$sales)
+unique(hr_all$salary)
+
+s = sapply(hr_all, function(x) sum(is.na(x)))
+s <- s[which (s>0)]
+
+#There are no NA Values, only thing is to create dummy variables for sales and salary
+```
+
+
+```{r}
+char_logicals = sapply(hr_all, is.character)
+col_names <- names(hr_all)[char_logicals]
+glimpse(hr_all)
+
+col_names <- col_names[!(col_names %in% c("data"))]
+
+for(col in col_names) {
+  hr_all <- CreateDummies(hr_all, col, 200)
+}
+```
+
+#separating and getting ready with data for model building
+
+```{r}
+hr_train <- hr_all %>%  filter(data=="Train") %>%  select(-data)
+hr_test <- hr_all %>%  filter(data=="Test") %>%  select(-c(data, left))
+```
+
+#dividing train data into two parts for training our model
+
+```{r}
+set.seed(2)
+s = sample(1:nrow(hr_train), 0.75*nrow(hr_train))
+
+hr_train1 = hr_train[s,]
+hr_train2 = hr_train[-s,]
+```
+
+```{r}
+library(car)
+
+names(hr_train1)
+for_vif =lm(left~.,data = hr_train1)
+
+sort(vif(for_vif), decreasing = T)[1:3]
+
+#removing sales_sales
+for_vif =lm(left~.-sales_sales,data = hr_train1)
+
+#moving to build logistic regression model
+
+log_fit = glm(left~.-sales_sales,data = hr_train1, family = "binomial")
+summary(log_fit)
+
+log_fit = glm(left~.-sales_sales-sales_product_mng-sales_support-sales_IT-sales_marketing-sales_technical, data=hr_train1,family = "binomial")
+
+
+library(pROC)
+
+val.pred = predict(log_fit, newdata = hr_train2, type = 'response')
+
+auc(roc(hr_train2$left,val.pred))
+
+```
+
+#we shall go further to do with random forest to improve the AUC Score
+
+
+```{r}
+param=list(mtry=c(6,9,12,15,17),
+           ntree=c(50,100,200,500,700),
+           maxnodes=c(5,10,15,20,30,50,100),
+           nodesize=c(1,2,5,10)
+           )
+
+
+mycost_auc=function(y,yhat){
+  roccurve=pROC::roc(y,yhat)
+  score=pROC::auc(roccurve)
+  return(score)
+}
+
+hr_train$left = as.factor(hr_train$left)
+num_trials=65
+my_params=subset_paras(param,num_trials)
+my_params
+
+myauc=0
+
+## Cvtuning
+## This code will take couple hours to finish
+## Dont execute in the class
+for(i in 1:num_trials){
+  print(paste('starting iteration :',i))
+  # uncomment the line above to keep track of progress
+  params=my_params[i,]
+  
+  names(hr_train)
+  k=cvTuning(randomForest,left~., 
+             data =hr_train,
+             tuning =params,
+             folds = cvFolds(nrow(hr_train), K=10, type ="random"),
+             cost =mycost_auc, seed =2,
+             predictArgs = list(type="prob")
+             )
+  score.this=k$cv[,2]
+  
+  if(score.this>myauc){
+    print(params)
+    # uncomment the line above to keep track of progress
+    myauc=score.this
+    print(myauc)
+    # uncomment the line above to keep track of progress
+    best_params=params
+  }
+  
+  print('DONE')
+  # uncomment the line above to keep track of progress
+}
+
+```
+
+
+
+#Predicting probs(scores) on model for test data
+```{r}
+hr.rf.final=randomForest(left~.,
+                         mtry=best_params$mtry,
+                         ntree=best_params$ntree,
+                         maxnodes=best_params$maxnodes,
+                         nodesize=best_params$nodesize,
+                         data=hr_train
+                         )
+
+test.score=predict(hr.rf.final,newdata = hr_test,type='prob')[,2]
+write.csv(test.score,'Manoj_Garikapati_P4_part2.csv',row.names = F)
+```
+
+
+
+
