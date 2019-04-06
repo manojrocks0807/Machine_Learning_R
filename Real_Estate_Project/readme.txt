@@ -6,3 +6,5 @@ putting more emphasis on qualities which increase the value of the property.
 
 
 This Repository has models built using R for predicting the value of property. 
+
+Added Mark down file with discussion, so that it will improve readability of code. Also the train and test data sets are attached
