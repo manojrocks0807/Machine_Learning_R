@@ -1,0 +1,476 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+#reading data into test and train data frames
+```{r}
+setwd("D:/Banking")
+
+bank_train <- read.csv("bank-full_train.csv", stringsAsFactors = F)
+bank_train1 <- read.csv("bank-full_train.csv", stringsAsFactors = F)
+head(bank_train1)
+bank_test <- read.csv("bank-full_test.csv", stringsAsFactors = F)
+```
+
+
+#Quiz 
+```{r}
+glimpse(bank_train)
+
+mean(bank_train$age, na.rm = T)
+
+
+summary(bank_train$balance)
+
+q1 <- 72
+q3 <- 1414
+IQR <- q3 - q1
+
+upp_lim <- q3 + 1.5 * IQR
+low_lim <- q1 - 1.5 * IQR
+
+sum(as.numeric(bank_train$balance > upp_lim | bank_train$balance < low_lim))
+
+var(bank_train$balance, na.rm = T)
+
+head(bank_train)
+
+ggplot(data = bank_train, aes(y))+ geom_bar()
+
+t <- table(bank_train$y)
+prop.table(t,1)
+```
+
+
+```{r}
+names(bank_test)
+names(bank_train)
+bank_test$y <- NA
+bank_test$data <- 'test'
+bank_train$data <- 'train'
+
+bank_all <- rbind(bank_train, bank_test)
+```
+
+```{r}
+library(dplyr)
+glimpse(bank_all)
+
+length(unique(bank_all$ID))
+#ID column not benificial for computation.
+
+bank_all <- bank_all %>%  select(-ID)
+col_log <- sapply(bank_all, function(x) is.character(x))
+col_names <- names(bank_all)[col_log]
+
+
+cat_cols <- col_names[!(col_names %in% c("data","y"))]
+
+CreateDummies=function(data,var,freq_cutoff=0){
+  t=table(data[,var])
+  t=t[t>freq_cutoff]
+  t=sort(t)
+  categories=names(t)[-1]
+  
+  for (cat in categories){
+    name <- paste(var,cat,sep="_")
+    name <- gsub(" ","",name)
+    name <- gsub("-","_",name)
+    name <- gsub("\\?","Q",name)
+    name <- gsub("<","LT_",name)
+    name <- gsub("\\+","",name)
+    name <- gsub("\\/","_",name)
+    name <- gsub(">","GT",name)
+    name <- gsub("=","EQ_",name)
+    name <- gsub(",","",name)
+    data[,name] <- as.numeric(data[,var]==cat)
+  }
+  data[,var]=NULL
+  return(data)
+}
+
+for(col in cat_cols) {
+  bank_all <- CreateDummies(bank_all, col, 150)
+}
+
+unique(bank_all$y)
+bank_all$y <- ifelse(bank_all$y=="yes",1,0)
+bank_all$y <- as.numeric(bank_all$y)
+
+glimpse(bank_all)
+
+bank_all <- bank_all[!(is.na(bank_all$y) & bank_all$data=="train"),]
+
+for (col in names(bank_all)) {
+  if(sum(is.na(bank_all[,col]))>0 & !(col %in% c("data","y"))){
+    bank_all[is.na(bank_all[,col]),col] <- mean(bank_all$data=="train",na.rm = T)
+  }
+}
+
+bank_train <- bank_all %>%  filter(data=="train") %>%  select(-data)
+
+bank_test <- bank_all %>%  filter(data=="test") %>%  select(-data)
+```
+
+```{r}
+set.seed(2)
+
+s <- sample(1:nrow(bank_train),0.8*nrow(bank_train))
+bank_train1 <- bank_train[s,]
+bank_train2 <- bank_train[-s,]
+
+
+for_vif <- lm(y~.,data=bank_train1)
+library(car)
+
+sort(vif(for_vif),decreasing = TRUE)[1:3]
+
+for_vif <- lm(y~.-month_may,data=bank_train1)
+
+sort(vif(for_vif),decreasing = TRUE)[1:3]
+
+for_vif <- lm(y~.-month_may-job_blue_collar,data=bank_train1)
+
+sort(vif(for_vif),decreasing = TRUE)[1:3]
+
+for_vif <- lm(y~.-month_may-job_blue_collar-poutcome_unknown,data=bank_train1)
+
+sort(vif(for_vif),decreasing = TRUE)[1:3]
+
+for_vif <- lm(y~.-month_may-job_blue_collar-poutcome_unknown-education_secondary,data=bank_train1)
+
+sort(vif(for_vif),decreasing = TRUE)[1:3]
+
+for_vif <- lm(y~.-month_may-job_blue_collar-poutcome_unknown-education_secondary-contact_unknown,data=bank_train1)
+
+sort(vif(for_vif),decreasing = TRUE)[1:3]
+
+
+#all vif less than 5, we are more than good to proceed
+
+summary(for_vif)
+
+log_fit <- glm(y~.-month_may-job_blue_collar-poutcome_unknown-education_secondary-contact_unknown,data=bank_train1, family = "binomial")
+
+log_fit <- step(log_fit)
+
+formula(log_fit)
+
+summary(log_fit)
+
+log_fit <- glm(formula = y ~ age + balance + duration + campaign + pdays + 
+    previous + job_student + job_housemaid + job_retired + job_admin. + 
+    job_technician + job_management + marital_single + 
+    education_primary + education_tertiary + housing_yes + loan_no + 
+    contact_cellular + month_mar + month_sep + month_oct + month_jan + 
+    month_feb + month_apr + month_jun + month_jul + poutcome_other + 
+    poutcome_failure, family = "binomial", data = bank_train1)
+
+```
+
+```{r}
+library(pROC)
+
+val.score <- predict(log_fit,newdata = bank_train2,type = 'response')
+
+auc(roc(bank_train2$y,val.score))
+
+
+#Building model on entire training data
+
+for_vif <- lm(y~.,data = bank_train)
+sort(vif(for_vif),decreasing = TRUE)[1:3]
+
+for_vif <- lm(y~.-month_may,data = bank_train)
+sort(vif(for_vif),decreasing = TRUE)[1:3]
+
+for_vif <- lm(y~.-month_may-job_blue_collar,data = bank_train)
+sort(vif(for_vif),decreasing = TRUE)[1:3]
+
+for_vif <- lm(y~.-month_may-job_blue_collar-poutcome_unknown,data = bank_train)
+sort(vif(for_vif),decreasing = TRUE)[1:3]
+
+for_vif <- lm(y~.-month_may-job_blue_collar-poutcome_unknown-education_secondary-contact_unknown,data = bank_train)
+sort(vif(for_vif),decreasing = TRUE)[1:3]
+
+#all p_values less than 5
+
+log_fit <- glm(y~.-month_may-job_blue_collar-poutcome_unknown-education_secondary-contact_unknown,data = bank_train, family = "binomial")
+
+log_fit_final <- step(log_fit)
+
+formula(log_fit_final)
+
+log_fit_final <- glm(y ~ age + balance + day + duration + campaign + pdays + previous + 
+    job_student + job_housemaid + job_retired + job_admin. + 
+    job_technician + job_management + marital_single + 
+    education_primary + education_tertiary + housing_yes + loan_no + 
+    contact_cellular + month_mar + month_sep + month_oct + month_jan + 
+    month_feb + month_apr + month_nov + month_jun + month_aug + 
+    month_jul + poutcome_other + poutcome_failure, data = bank_train, family = "binomial")
+
+summary(log_fit_final)
+```
+
+```{r}
+test.prob.score <- predict(log_fit_final, newdata = bank_test, type = "response")
+train.score <- predict(log_fit_final, newdata = bank_train, type = "response")
+
+real <- bank_train$y
+
+cutoffs=seq(0.001,0.999,0.001)
+
+cutoff_data=data.frame(cutoff=99,Sn=99,Sp=99,KS=99,F5=99,F.1=99,M=99)
+
+for (cutoff in cutoffs) {
+  predicted <- as.numeric(train.score > cutoff)
+  
+  TP <- sum(real == 1 & predicted == 1)
+  TN <- sum(real == 0 & predicted == 0)
+  FP <- sum(real == 0 & predicted == 1)
+  FN <- sum(real == 1 & predicted == 0)
+  
+  P <- TP+FN
+  N <- TN+FP
+  
+  Sn <- TP/P
+  Sp <- TN/N
+  precision <- TP / (TP+FP)
+  recall <- Sn
+  
+  KS <- (TP/P) - (FP/N)
+  F5=(26*precision*recall)/((25*precision)+recall)
+  F.1=(1.01*precision*recall)/((.01*precision)+recall)
+  
+  M=(4*FP+FN)/(5*(P+N))
+  
+  cutoff_data=rbind(cutoff_data,
+                    c(cutoff,Sn,Sp,KS,F5,F.1,M))
+}
+
+cutoff_data=cutoff_data[-1,]
+
+library(ggplot2)
+ggplot(cutoff_data,aes(x=cutoff,y=M))+geom_line()
+
+library(tidyr)
+
+cutoff_long=cutoff_data %>% 
+  gather(Measure,Value,Sn:M)
+
+
+
+ggplot(cutoff_long,aes(x=cutoff,y=Value,color=Measure))+geom_line()
+
+
+my_cutoff=cutoff_data$cutoff[which.max(cutoff_data$KS)]
+
+my_cutoff
+
+```
+
+#Let's try with Random Forests
+
+
+```{r}
+setwd("D:/Banking")
+
+bank_train <- read.csv("bank-full_train.csv", stringsAsFactors = F)
+bank_test <- read.csv("bank-full_test.csv", stringsAsFactors = F)
+
+bank_test$y <- NA
+bank_test$data <- 'test'
+bank_train$data <- 'train'
+
+bank_all <- rbind(bank_train, bank_test)
+
+```
+
+```{r}
+col_log <- sapply(bank_all, function(x) is.character(x))
+col_names <- names(bank_all)[col_log]
+
+cat_cols <- col_names[!(col_names %in% c("data","y"))]
+for(col in cat_cols) {
+  bank_all <- CreateDummies(bank_all, col, 150)
+}
+
+unique(bank_all$y)
+bank_all$y <- ifelse(bank_all$y=="yes",1,0)
+bank_all$y <- as.factor(bank_all$y)
+
+glimpse(bank_all)
+
+bank_all <- bank_all[!(is.na(bank_all$y) & bank_all$data=="train"),]
+
+for (col in names(bank_all)) {
+  if(sum(is.na(bank_all[,col]))>0 & !(col %in% c("data","y"))){
+    bank_all[is.na(bank_all[,col]),col] <- mean(bank_all$data=="train",na.rm = T)
+  }
+}
+
+bank_train <- bank_all %>%  filter(data=="train") %>%  select(-data)
+
+bank_test <- bank_all %>%  filter(data=="test") %>%  select(-data)
+
+```
+
+
+```{r}
+## paramter values that we want to try out
+param=list(mtry=c(5,10,15,20,25),
+           ntree=c(50,100,200,500,700),
+           maxnodes=c(5,10,15,20,30,50),
+           nodesize=c(1,2,5,10))
+
+
+## Function for selecting random subset of params
+
+subset_paras=function(full_list_para,n=10){
+  
+  all_comb=expand.grid(full_list_para)
+  
+  s=sample(1:nrow(all_comb),n)
+  
+  subset_para=all_comb[s,]
+  
+  return(subset_para)
+}
+
+## 
+
+num_trials=50
+my_params=subset_paras(param,num_trials)
+
+
+mycost_auc=function(y,yhat){
+  roccurve=pROC::roc(y,yhat)
+  score=pROC::auc(roccurve)
+  return(score)
+}
+
+
+myauc <- 0
+
+library(randomForest)
+library(cvTools)
+
+for(i in 1:num_trials){
+  print(paste('starting iteration :',i))
+  params=my_params[i,]
+  
+  k=cvTuning(randomForest,y~., 
+             data =bank_train,
+             tuning =params,
+             folds = cvFolds(nrow(bank_train), K=10, type ="random"),
+             cost =mycost_auc, seed =2,
+             predictArgs = list(type="prob")
+             )
+  score.this=k$cv[,2]
+  
+  if(score.this>myauc){
+    print(params)
+    myauc=score.this
+    print(myauc)
+    best_params=params
+  }
+  
+  print('DONE')
+}
+
+```
+
+```{r}
+bank.rf.final <- randomForest(y~.-month_may-job_blue_collar-poutcome_unknown-education_secondary-contact_unknown,mtry=best_params$mtry,
+                         ntree=best_params$ntree,
+                         maxnodes=best_params$maxnodes,
+                         nodesize=best_params$nodesize,
+                         data=bank_train
+                         )
+
+
+test.prob.score <- predict(bank.rf.final, newdata = bank_test, type = "prob")[,2]
+
+train.score <- predict(bank.rf.final, newdata = bank_train, type = "prob")[,2]
+
+real <- bank_train$y
+
+
+
+cutoffs=seq(0.001,0.999,0.001)
+
+cutoff_data=data.frame(cutoff=99,Sn=99,Sp=99,KS=99,F5=99,F.1=99,M=99)
+
+for (cutoff in cutoffs) {
+  predicted <- as.numeric(train.score > cutoff)
+  
+  TP <- sum(real == 1 & predicted == 1)
+  TN <- sum(real == 0 & predicted == 0)
+  FP <- sum(real == 0 & predicted == 1)
+  FN <- sum(real == 1 & predicted == 0)
+  
+  P <- TP+FN
+  N <- TN+FP
+  
+  Sn <- TP/P
+  Sp <- TN/N
+  precision <- TP / (TP+FP)
+  recall <- Sn
+  
+  KS <- (TP/P) - (FP/N)
+  F5=(26*precision*recall)/((25*precision)+recall)
+  F.1=(1.01*precision*recall)/((.01*precision)+recall)
+  
+  M=(4*FP+FN)/(5*(P+N))
+  
+  cutoff_data=rbind(cutoff_data,
+                    c(cutoff,Sn,Sp,KS,F5,F.1,M))
+}
+
+cutoff_data=cutoff_data[-1,]
+
+library(ggplot2)
+ggplot(cutoff_data,aes(x=cutoff,y=M))+geom_line()
+
+library(tidyr)
+
+cutoff_long=cutoff_data %>% 
+  gather(Measure,Value,Sn:M)
+
+
+
+ggplot(cutoff_long,aes(x=cutoff,y=Value,color=Measure))+geom_line()
+
+
+my_cutoff=cutoff_data$cutoff[which.max(cutoff_data$KS)]
+
+my_cutoff
+
+table(real)
+
+train.pred <- as.numeric(train.score > my_cutoff)
+table(train.pred)
+
+```
+
+```{r}
+test.predicted <- as.numeric(test.prob.score>my_cutoff)
+table(y)
+y <- ifelse(test.predicted == 1, 'yes','no')
+y <- as.data.frame(y)
+write.csv(y,"Manoj_Garikapati_P5_part2.csv",row.names = F)
+df <- read.csv("Manoj_Garikapati_P5_part2.csv")
+table(df$y)
+head(df)
+#best_params = (15,700,50,1)
+```
+
+
+
+
+
+
+
+
