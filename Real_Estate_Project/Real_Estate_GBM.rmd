@@ -1,0 +1,288 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+```{r}
+setwd("D:/Real_Estate")
+train_df = read.csv("housing_train.csv",stringsAsFactors = F)
+
+test_df = read.csv("housing_test.csv",stringsAsFactors = F)
+
+```
+
+#Combining train and test data for data cleaning purposes
+
+```{r}
+test_df$Price = NA
+train_df$data = 'train'
+test_df$data = 'test'
+
+str(train_df)
+all_df = rbind(train_df, test_df)
+```
+
+
+
+```{r}
+library(dplyr)
+
+glimpse(all_df)
+```
+The Data types seem to be fine through our glimpse function, however further if there is any change required we can do the required changes.
+
+
+#Let's check for NA values in our columns
+```{r}
+sapply(all_df, function(x) sum(is.na(x)))
+```
+
+```{r}
+#out of all rooms and bedroom are highly correlated, it's better to predict Na's using rooms
+bedroom_lm = lm(Bedroom2 ~ Rooms, data = subset(all_df, !is.na(Bedroom2)))
+#Now filling the Na's
+all_df$Bedroom2[is.na(all_df$Bedroom2)]=ceiling(predict(bedroom_lm, newdata = data.frame(Rooms = all_df$Rooms[is.na(all_df$Bedroom2)])))
+
+#let's check for NA values in Bedroom 2 column
+sum(is.na(all_df$Bedroom2)) #-- Na's removed
+
+
+#similary for bathrooms, as we could see previously bedrooms highly correlated to rooms
+#we can see cor for bathrooms and rooms
+cor.test(all_df$Bathroom, all_df$Rooms)
+cor.test(all_df$Bathroom, all_df$Price)
+bathroom_lm = lm(Bathroom ~ Rooms, data = subset(all_df, !is.na(Bathroom)))
+#filling NA"s"
+all_df$Bathroom[is.na(all_df$Bathroom)]=ceiling(predict(bathroom_lm, newdata = data.frame(Rooms = all_df$Rooms[is.na(all_df$Bathroom)])))
+sum(is.na(all_df$Bathroom))
+
+
+#similarly we can do for car as well
+cor.test(all_df$Car, all_df$Rooms)  # values is less than 0.5 so let's fill these values #with #mean
+
+all_df$Car[is.na(all_df$Car)]=mean(all_df$Car, na.rm = T)
+
+#we are remaining with landsize and building area
+cor.test(all_df$Landsize, all_df$Rooms)
+cor.test(all_df$Landsize, all_df$Price)
+cor.test(all_df$Landsize, all_df$BuildingArea)
+#it seems no large scope of looking for correlation, landsize is having a outlier as per 
+#our earlier summary hence let's use median to fill NA's
+all_df$Landsize[is.na(all_df$Landsize)]=median(all_df$Landsize, na.rm=T)
+
+#previously we could see there is no correlation for building area as well, hence let's 
+#impute using median for building area because it's having an outlier
+all_df$BuildingArea[is.na(all_df$BuildingArea)]=median(all_df$BuildingArea, na.rm = T)
+
+
+all_df$BA_IND <- NULL
+head(all_df)
+
+```
+#Year built is the only column leff out, price is from test data
+```{r}
+sum(is.na(all_df$YearBuilt[all_df$data=="train"]))
+#Let's fill with rounded mean value for missing Year built column
+
+all_df$YearBuilt[is.na(all_df$YearBuilt)] = round(mean(all_df$YearBuilt, na.rm = T))
+
+#final CHeck with number of NA values
+sapply(all_df, function(x) sum(is.na(x)))
+#so here we are without NA's except Price which should be predicted for Test data
+```
+
+#Now let's create dummy variables which will be considered for our model
+```{r}
+#backing up data
+back_up_data = data.frame(all_df)
+
+
+library(dplyr)
+all_df <- select(all_df, -c(Address))
+
+```
+
+
+
+```{r}
+#Creating dummies function
+CreateDummies=function(data,var,freq_cutoff=100){ 
+  t=table(data[,var]) 
+  t=t[t>freq_cutoff] 
+  t=sort(t)
+  categories=names(t)[-1]
+for( cat in categories){ name=paste(var,cat,sep="_")
+name=gsub(" ","",name)
+name=gsub("-","_",name) 
+name=gsub("\\?","Q",name) 
+name=gsub("<","LT_",name) 
+name=gsub("\\+","",name) 
+name=gsub(">","GT_",name)
+name=gsub("=","EQ_",name) 
+name=gsub(",","",name) 
+name=gsub("/","_",name) 
+data[,name]=as.numeric(data[,var]==cat)
+  }
+data[,var]=NULL 
+return(data)
+}
+```
+```{r}
+#Using above function creating dummies for character values in our data
+char_logical=sapply(all_df,is.character)
+cat_cols=names(all_df)[char_logical] 
+cat_cols
+#data doesn't require dummy variable
+cat_cols = cat_cols[!(cat_cols %in% c('data'))]
+
+for(col in cat_cols){ 
+  all_df=CreateDummies(all_df,col,150) 
+}
+
+glimpse(all_df)
+```
+
+#Divding the data set
+```{r}
+all_df = all_df[!((is.na(all_df$Price)) && all_df$data=='train'),]
+
+upd_train = all_df %>% filter(data=='train') %>% select(-data)
+upd_test = all_df %>% filter(data=='test') %>% select(-data)
+
+```
+
+
+```{r}
+set.seed(2)
+s=sample(1:nrow(upd_train),0.7*nrow(upd_train))
+upd_train1=upd_train[s,]
+upd_train2=upd_train[-s,]
+
+```
+
+
+```{r}
+fit = lm(Price~.-Bedroom2,data=upd_train1)
+library(car)
+sort(vif(fit),decreasing = FALSE)[1:3]
+
+
+FIT = step(fit)
+summary(FIT)
+formula(fit)
+formula(FIT)
+
+final_fit <- lm(Price ~ Rooms + Distance + Postcode + Bathroom + Car + Landsize + 
+    BuildingArea + YearBuilt + Suburb_Essendon + Suburb_SouthYarra + 
+     Suburb_Preston + Suburb_Richmond + Suburb_Reservoir + 
+    Type_u + Type_h + Method_PI + Method_S + SellerG_Miles + 
+    SellerG_RT + SellerG_Biggin + SellerG_Ray + SellerG_Marshall + 
+    SellerG_hockingstuart + SellerG_Jellis + CouncilArea_HobsonsBay + 
+    CouncilArea_Bayside  + CouncilArea_Banyule +
+    CouncilArea_PortPhillip + CouncilArea_Stonnington + CouncilArea_Darebin + 
+    CouncilArea_Moreland + CouncilArea_Boroondara, data = upd_train1)
+
+summary(final_fit)
+
+train2.predictions = predict(fit, newdata = upd_train2)
+
+#RMSE calculattion
+errors = upd_train2$Price - train2.predictions
+
+rms = errors**2 %>% mean() %>% sqrt()
+mean(upd_train2$Price)/rms
+
+```
+
+
+
+#Using GBM for better model
+
+```{r}
+library(gbm)
+library(cvTools)
+
+#install.packages("gbm")
+
+param=list(interaction.depth=c(1:7),
+           n.trees=c(50,100,200,500,700),
+           shrinkage=c(.1,.01,.001),
+           n.minobsinnode=c(1,2,5,10))
+
+## ------------------------------------------------------------------------
+subset_paras=function(full_list_para,n=10){
+  
+  all_comb=expand.grid(full_list_para)
+  
+  s=sample(1:nrow(all_comb),n)
+  
+  subset_para=all_comb[s,]
+  
+  return(subset_para)
+}
+
+num_trials=10
+my_params=subset_paras(param,num_trials)
+myerror=9999999
+
+for(i in 1:num_trials){
+  print(paste0('starting iteration:',i))
+  params=my_params[i,]
+
+  k=cvTuning(gbm,Price~.,
+             data =upd_train,
+             tuning =params,
+             args = list(distribution="gaussian"),
+             folds = cvFolds(nrow(upd_train), K=10, type = "random"),
+             seed =2,
+             predictArgs = list(n.trees=params$n.trees)
+             )
+  score.this=k$cv[,2]
+
+  if(score.this<myerror){
+    print(params)
+    myerror=score.this
+    print(myerror)
+    best_params=params
+  }
+
+  print('DONE')
+}
+
+
+
+
+```
+
+
+```{r}
+# interaction.depth n.trees shrinkage n.minobsinnode
+#             7     100       0.1             10
+re.gbm.final=gbm(Price~.,data=upd_train,
+                 n.trees = best_params$n.trees,
+                 n.minobsinnode = best_params$n.minobsinnode,
+                 shrinkage = best_params$shrinkage,
+                 interaction.depth = best_params$interaction.depth,
+                 distribution = "gaussian")
+
+
+test.pred=predict(re.gbm.final,newdata=upd_test,n.trees = best_params$n.trees)
+Price <- test.pred
+Price <- as.data.frame(Price)
+write.csv(test.pred,"Manoj_Garikapati_P1_par2.csv",row.names = F)
+
+
+summary(upd_train)
+getwd()
+
+```
+
+
+
+#3500995.7
+#212467
+
+
+
+
+
