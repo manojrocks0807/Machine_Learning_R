@@ -1,0 +1,249 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+Setting up the required working directory
+
+```{r}
+setwd("D:/Retails")
+```
+
+
+#reading the test and train data from CSV files
+```{r}
+retail_train <- read.csv("store_train.csv", stringsAsFactors = F)
+retail_test  <- read.csv("store_test.csv", stringsAsFactors = F)
+
+#combining data for wrangling purposes
+
+names(retail_train)
+names(retail_test)
+retail_test$store <- NA
+retail_train$data <- "train"
+retail_test$data <- "test"
+
+retail_all <- rbind(retail_train, retail_test)
+```
+
+
+#Data Cleaning Required
+```{r}
+
+#checking for NA Values in our data
+
+s <- sapply(retail_all, function(x) sum(is.na(x)))
+s <- which(s > 0)
+
+#Let's fill NA values in country with missing data and population with mean values
+
+retail_all$country[is.na(retail_all$country)] <- "Missing_Value"
+retail_all$population[is.na(retail_all$population)] <- mean(retail_all$population, na.rm = T)
+
+library(dplyr)
+glimpse(retail_all)
+
+```
+
+
+Creating Dummies for character variables
+```{r}
+CreateDummies=function(data,var,freq_cutoff=100){ 
+  t=table(data[,var]) 
+  t=t[t>freq_cutoff] 
+  t=sort(t)
+  categories=names(t)[-1]
+for( cat in categories){ name=paste(var,cat,sep="_")
+name=gsub(" ","",name)
+name=gsub("-","_",name) 
+name=gsub("\\?","Q",name) 
+name=gsub("<","LT_",name) 
+name=gsub("\\+","",name) 
+name=gsub(">","GT_",name)
+name=gsub("=","EQ_",name) 
+name=gsub(",","",name) 
+name=gsub("/","_",name) 
+data[,name]=as.numeric(data[,var]==cat)
+  }
+data[,var]=NULL 
+return(data)
+}
+
+#here country and state variable is numeric which should have character
+
+retail_all$country <- as.character(retail_all$country)
+#retail_all$State <- as.character(retail_all$State)
+
+#similary cousub and countyname are to be character data types
+
+retail_all$CouSub <- as.character(retail_all$CouSub)
+retail_all$countyname <- as.character(retail_all$countyname)
+
+sort(table(retail_all$country), decreasing = T)
+
+sapply(retail_all, function(x) length(unique(x)))
+
+#store code should not be considered as it is corresponds to areaname.. 
+
+retail_all <- select(retail_all, -c(storecode, State))
+
+#checking for values with characters nd unique values
+
+char_logical=sapply(retail_all,is.character)
+cat_cols=names(retail_all)[char_logical] 
+cat_cols
+#data doesn't require dummy variable
+cat_cols = cat_cols[!(cat_cols %in% c('data'))]
+names(retail_all)
+sapply(retail_all, function(x) class(x))
+for(col in cat_cols) {
+  retail_all <- CreateDummies(retail_all, col, 100)
+}
+
+#creating total_sales column
+retail_all$total_sales <- retail_all$sales0 + retail_all$sales1+retail_all$sales2+retail_all$sales3+retail_all$sales4
+
+#now removing all sales except total_sales
+
+retail_all <- select(retail_all, -c(sales0, sales1, sales2, sales3, sales4))
+glimpse(retail_all)
+```
+
+#Filling for missing values now
+```{r}
+missing <- sapply(retail_all, function(x) sum(is.na(x)))
+which(missing > 0)
+
+unique(retail_all$country_21)
+```
+
+#separate test and train data
+```{r}
+retail_train <- retail_all %>% filter(data == "train") %>% select(-c(data))
+retail_test <- retail_all %>%  filter(data == "test") %>%  select(-c(data, store))
+```
+
+
+#Split train into two for testing purposes
+```{r}
+set.seed(2)
+s= sample(1:nrow(retail_train), 0.75*nrow(retail_train))
+retail_train1 <- retail_train[s,]
+retail_train2 <- retail_train[-s,]
+
+#let's build our model on train1, checking for VIF using linear regression firstly
+
+for_vif <- lm(store~.-Id, data=retail_train1)
+library(car)
+sort(vif(for_vif), decreasing = T)[1:3]
+#removing sales0 variable
+for_vif <- lm(store~.-Id, data=retail_train1)
+#we could note that sales variable are related to each another, it's better to find sum
+sort(vif(for_vif), decreasing = T)[1:3]
+#values are good enough now to proceed
+alias(for_vif)
+#with above I could note that state_alpha variable is related to state variable, hence
+#repeating the process by removing state variable
+summary(for_vif)
+
+log_fit <- glm(store~.,data = retail_train1, family = "binomial")
+summary(log_fit)
+```
+
+
+#Predicting on our test data
+```{r}
+
+library(pROC)
+pred_val <- predict(log_fit, newdata = retail_train2, type = "response")
+
+auc(roc(retail_train2$store,pred_val)) #-- 0.7713 good model
+```
+
+#Let's try using random forests
+
+```{r}
+param=list(mtry=c(5,10,15,20,26),
+           ntree=c(50,100,200,500,700),
+           maxnodes=c(5,10,15,20,30,50,100),
+           nodesize=c(1,2,5,10)
+           )
+
+
+mycost_auc=function(y,yhat){
+  roccurve=pROC::roc(y,yhat)
+  score=pROC::auc(roccurve)
+  return(score)
+}
+
+
+retail_train$store = as.factor(retail_train$store)
+num_trials=25
+my_params=subset_paras(param,num_trials)
+my_params
+
+myauc=0
+
+library(cvTools)
+library(randomForest)
+## Cvtuning
+## This code will take couple hours to finish
+## Dont execute in the class
+for(i in 1:num_trials){
+  print(paste('starting iteration :',i))
+  # uncomment the line above to keep track of progress
+  params=my_params[i,]
+names(retail_train)  
+  names(retail_train)
+  k=cvTuning(randomForest,store~.-Id, 
+             data =retail_train,
+             tuning =params,
+             folds = cvFolds(nrow(retail_train), K=10, type ="random"),
+             cost =mycost_auc, seed =2,
+             predictArgs = list(type="prob")
+             )
+  score.this=k$cv[,2]
+  
+  if(score.this>myauc){
+    print(params)
+    # uncomment the line above to keep track of progress
+    myauc=score.this
+    print(myauc)
+    # uncomment the line above to keep track of progress
+    best_params=params
+  }
+  
+  print('DONE')
+  # uncomment the line above to keep track of progress
+}
+
+```
+
+
+
+#Predicting probs(scores) on model for test data
+```{r}
+hr.rf.final=randomForest(store~.,
+                         mtry=best_params$mtry,
+                         ntree=best_params$ntree,
+                         maxnodes=best_params$maxnodes,
+                         nodesize=best_params$nodesize,
+                         data=retail_train
+                         )
+
+test.score=predict(hr.rf.final,newdata = retail_test,type='prob')[,2]
+store <- data.frame(test.score)
+write.csv(test.score,'Manoj_Garikapati_P2_part2.csv',row.names = F)
+```
+
+```
+
+
+
+
+
+
+
+
+
